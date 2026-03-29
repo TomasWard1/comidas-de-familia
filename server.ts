@@ -17,18 +17,35 @@ db.exec(`
     member_id INTEGER NOT NULL REFERENCES members(id),
     category TEXT NOT NULL,
     notes TEXT DEFAULT '',
+    meal_date TEXT DEFAULT (date('now', 'localtime')),
+    meal_time TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
   );
 
   CREATE INDEX IF NOT EXISTS idx_logs_category ON logs(category);
   CREATE INDEX IF NOT EXISTS idx_logs_member ON logs(member_id);
+  CREATE INDEX IF NOT EXISTS idx_logs_meal_date ON logs(meal_date);
 `);
+
+// Migrate: add meal_date and meal_time columns if missing (existing DBs)
+try {
+  db.exec("ALTER TABLE logs ADD COLUMN meal_date TEXT DEFAULT (date('now', 'localtime'))");
+} catch { /* column already exists */ }
+try {
+  db.exec("ALTER TABLE logs ADD COLUMN meal_time TEXT DEFAULT ''");
+} catch { /* column already exists */ }
+try {
+  db.exec("CREATE INDEX IF NOT EXISTS idx_logs_meal_date ON logs(meal_date)");
+} catch { /* index already exists */ }
+
+// Backfill: set meal_date from created_at for rows that have NULL meal_date
+db.exec("UPDATE logs SET meal_date = date(created_at) WHERE meal_date IS NULL");
 
 // Seed default members if empty
 const count = db.query("SELECT COUNT(*) as c FROM members").get() as { c: number };
 if (count.c === 0) {
   const insert = db.prepare("INSERT INTO members (name) VALUES (?)");
-  for (const name of ["Tomás", "Mamá", "Papá", "Hermano"]) {
+  for (const name of ["Tomas", "Emma", "Mateo", "Maria"]) {
     insert.run(name);
   }
 }
@@ -60,16 +77,23 @@ app.delete("/api/members/:id", (c) => {
 });
 
 app.post("/api/log", async (c) => {
-  const { memberId, category, notes } = await c.req.json<{
+  const { memberId, category, notes, mealDate, mealTime } = await c.req.json<{
     memberId: number;
     category: string;
     notes?: string;
+    mealDate?: string;
+    mealTime?: string;
   }>();
   if (!memberId || !category) return c.json({ error: "memberId and category required" }, 400);
-  db.prepare("INSERT INTO logs (member_id, category, notes) VALUES (?, ?, ?)").run(
+  const validMealTimes = ["Mañana", "Mediodía", "Tarde", "Noche"];
+  const finalMealTime = mealTime && validMealTimes.includes(mealTime) ? mealTime : "";
+  const finalMealDate = mealDate || new Date().toISOString().slice(0, 10);
+  db.prepare("INSERT INTO logs (member_id, category, notes, meal_date, meal_time) VALUES (?, ?, ?, ?, ?)").run(
     memberId,
     category,
-    notes || ""
+    notes || "",
+    finalMealDate,
+    finalMealTime
   );
   return c.json({ ok: true }, 201);
 });
@@ -98,7 +122,7 @@ app.get("/api/history", (c) => {
   const offset = Number(c.req.query("offset") || 0);
   const history = db
     .query(
-      `SELECT l.id, m.name, l.category, l.notes, l.created_at
+      `SELECT l.id, m.name, l.category, l.notes, l.meal_date, l.meal_time, l.created_at
        FROM logs l
        JOIN members m ON m.id = l.member_id
        ORDER BY l.created_at DESC
@@ -106,6 +130,38 @@ app.get("/api/history", (c) => {
     )
     .all(limit, offset);
   return c.json(history);
+});
+
+app.get("/api/calendar", (c) => {
+  const month = c.req.query("month"); // e.g. "2026-03"
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+    return c.json({ error: "month param required (YYYY-MM)" }, 400);
+  }
+  const startDate = month + "-01";
+  // Calculate last day of month
+  const [y, m] = month.split("-").map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const endDate = month + "-" + String(lastDay).padStart(2, "0");
+
+  const logs = db
+    .query(
+      `SELECT l.id, m.name, l.category, l.notes, l.meal_date, l.meal_time, l.created_at
+       FROM logs l
+       JOIN members m ON m.id = l.member_id
+       WHERE l.meal_date >= ? AND l.meal_date <= ?
+       ORDER BY l.meal_date, l.meal_time`
+    )
+    .all(startDate, endDate);
+
+  // Group by date
+  const grouped: Record<string, any[]> = {};
+  (logs as any[]).forEach((log) => {
+    const d = log.meal_date || log.created_at?.slice(0, 10);
+    if (!grouped[d]) grouped[d] = [];
+    grouped[d].push(log);
+  });
+
+  return c.json(grouped);
 });
 
 app.get("/api/next", (c) => {
