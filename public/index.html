@@ -91,8 +91,6 @@ body::before{content:'';position:fixed;inset:0;opacity:.03;background-image:url(
 .log-btn{width:100%;padding:18px;border:none;border-radius:var(--radius);background:var(--terra);color:white;font-size:17px;font-weight:700;font-family:var(--font-display);cursor:pointer;transition:all .15s;letter-spacing:-.2px;box-shadow:0 4px 16px rgba(196,93,62,.2);font-variation-settings:'opsz' 24;margin-top:4px}
 .log-btn:disabled{opacity:.25;cursor:not-allowed;box-shadow:none}
 .log-btn:not(:disabled):active{transform:scale(.97);box-shadow:0 2px 8px rgba(196,93,62,.3)}
-.log-summary{text-align:center;font-size:14px;color:var(--ink2);font-weight:500;padding:8px 0 4px;min-height:28px}
-.log-summary .sum-swap{color:var(--ochre);font-weight:600}
 
 /* ===== HISTORY ===== */
 .history-list{display:flex;flex-direction:column}
@@ -240,7 +238,6 @@ body::before{content:'';position:fixed;inset:0;opacity:.03;background-image:url(
       <div class="log-label">Notas</div>
       <textarea id="log-notes" class="notes-input" placeholder="Opcional — ej: hizo milanesas"></textarea>
     </div>
-    <div id="log-summary" class="log-summary"></div>
     <button id="log-btn" class="log-btn" disabled>Registrar</button>
   </div>
 </div>
@@ -436,30 +433,6 @@ function updateLogBtn() {
   var dateOk = selectedDay !== 'Otra fecha' || selectedCustomDate;
   var swapOk = !isSwap || selectedSwapTarget;
   document.getElementById('log-btn').disabled = !(selectedMember && selectedCat && selectedMealTime && dateOk && swapOk);
-  updateSummary();
-}
-
-function updateSummary() {
-  var el = document.getElementById('log-summary');
-  el.textContent = '';
-  if (!selectedMember || !selectedCat) return;
-  var who = members.find(function(m) { return m.id === selectedMember; });
-  if (!who) return;
-  var catLabel = CAT_SHORT[selectedCat] || selectedCat;
-
-  if (isSwap && selectedSwapTarget) {
-    var target = members.find(function(m) { return m.id === selectedSwapTarget; });
-    if (!target) return;
-    var t1 = document.createTextNode(who.name + ' hizo ' + catLabel + ' ');
-    var arrow = document.createTextNode(' ');
-    var swapSpan = document.createElement('span');
-    swapSpan.className = 'sum-swap';
-    swapSpan.textContent = '→ le cuenta a ' + target.name;
-    el.appendChild(t1);
-    el.appendChild(swapSpan);
-  } else if (!isSwap) {
-    el.textContent = who.name + ' hizo ' + catLabel;
-  }
 }
 
 function renderLogChips() {
