@@ -1,0 +1,11 @@
+{
+  "name": "comidas-de-familia",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "bun run server.ts",
+    "dev": "bun --watch run server.ts"
+  },
+  "dependencies": {
+    "hono": "^4.7.0"
+  }
+}
