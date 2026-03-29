@@ -1,0 +1,5 @@
+node_modules
+.worktrees
+comidas.db
+comidas.db-wal
+comidas.db-shm
