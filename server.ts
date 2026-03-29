@@ -19,6 +19,8 @@ db.exec(`
     notes TEXT DEFAULT '',
     meal_date TEXT DEFAULT (date('now', 'localtime')),
     meal_time TEXT DEFAULT '',
+    is_swap INTEGER DEFAULT 0,
+    credited_to INTEGER DEFAULT NULL REFERENCES members(id),
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
   );
 
@@ -37,6 +39,14 @@ try {
 try {
   db.exec("CREATE INDEX IF NOT EXISTS idx_logs_meal_date ON logs(meal_date)");
 } catch { /* index already exists */ }
+
+// Migrate: add swap columns if missing (existing DBs)
+try {
+  db.exec("ALTER TABLE logs ADD COLUMN is_swap INTEGER DEFAULT 0");
+} catch { /* column already exists */ }
+try {
+  db.exec("ALTER TABLE logs ADD COLUMN credited_to INTEGER DEFAULT NULL REFERENCES members(id)");
+} catch { /* column already exists */ }
 
 // Backfill: set meal_date from created_at for rows that have NULL meal_date
 db.exec("UPDATE logs SET meal_date = date(created_at) WHERE meal_date IS NULL");
@@ -77,23 +87,28 @@ app.delete("/api/members/:id", (c) => {
 });
 
 app.post("/api/log", async (c) => {
-  const { memberId, category, notes, mealDate, mealTime } = await c.req.json<{
+  const { memberId, category, notes, mealDate, mealTime, isSwap, creditedTo } = await c.req.json<{
     memberId: number;
     category: string;
     notes?: string;
     mealDate?: string;
     mealTime?: string;
+    isSwap?: boolean;
+    creditedTo?: number;
   }>();
   if (!memberId || !category) return c.json({ error: "memberId and category required" }, 400);
+  if (isSwap && !creditedTo) return c.json({ error: "creditedTo required when isSwap is true" }, 400);
   const validMealTimes = ["Mañana", "Mediodía", "Tarde", "Noche"];
   const finalMealTime = mealTime && validMealTimes.includes(mealTime) ? mealTime : "";
   const finalMealDate = mealDate || new Date().toISOString().slice(0, 10);
-  db.prepare("INSERT INTO logs (member_id, category, notes, meal_date, meal_time) VALUES (?, ?, ?, ?, ?)").run(
+  db.prepare("INSERT INTO logs (member_id, category, notes, meal_date, meal_time, is_swap, credited_to) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
     memberId,
     category,
     notes || "",
     finalMealDate,
-    finalMealTime
+    finalMealTime,
+    isSwap ? 1 : 0,
+    isSwap && creditedTo ? creditedTo : null
   );
   return c.json({ ok: true }, 201);
 });
@@ -109,7 +124,7 @@ app.get("/api/scores", (c) => {
     .query(
       `SELECT m.id as memberId, m.name, l.category, COUNT(l.id) as count
        FROM members m
-       LEFT JOIN logs l ON l.member_id = m.id
+       LEFT JOIN logs l ON COALESCE(l.credited_to, l.member_id) = m.id
        GROUP BY m.id, l.category
        ORDER BY m.name, l.category`
     )
@@ -122,9 +137,11 @@ app.get("/api/history", (c) => {
   const offset = Number(c.req.query("offset") || 0);
   const history = db
     .query(
-      `SELECT l.id, m.name, l.category, l.notes, l.meal_date, l.meal_time, l.created_at
+      `SELECT l.id, m.name, l.category, l.notes, l.meal_date, l.meal_time, l.created_at,
+              l.is_swap, l.credited_to, mc.name as credited_name
        FROM logs l
        JOIN members m ON m.id = l.member_id
+       LEFT JOIN members mc ON mc.id = l.credited_to
        ORDER BY l.created_at DESC
        LIMIT ? OFFSET ?`
     )
@@ -145,9 +162,11 @@ app.get("/api/calendar", (c) => {
 
   const logs = db
     .query(
-      `SELECT l.id, m.name, l.category, l.notes, l.meal_date, l.meal_time, l.created_at
+      `SELECT l.id, m.name, l.category, l.notes, l.meal_date, l.meal_time, l.created_at,
+              l.is_swap, l.credited_to, mc.name as credited_name
        FROM logs l
        JOIN members m ON m.id = l.member_id
+       LEFT JOIN members mc ON mc.id = l.credited_to
        WHERE l.meal_date >= ? AND l.meal_date <= ?
        ORDER BY l.meal_date, l.meal_time`
     )
@@ -175,8 +194,8 @@ app.get("/api/next", (c) => {
         FROM members m
         CROSS JOIN all_categories ac
         LEFT JOIN (
-          SELECT member_id, category, COUNT(*) as cnt FROM logs GROUP BY member_id, category
-        ) l ON l.member_id = m.id AND l.category = ac.category
+          SELECT COALESCE(credited_to, member_id) as effective_member, category, COUNT(*) as cnt FROM logs GROUP BY effective_member, category
+        ) l ON l.effective_member = m.id AND l.category = ac.category
       )
       SELECT category, name, count
       FROM counts c1

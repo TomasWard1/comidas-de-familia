@@ -1,0 +1,35 @@
+name: Deploy to secondary-mac
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Setup SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 100.87.186.1 >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no aios@100.87.186.1"
+          SCP="scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+
+          $SCP server.ts package.json aios@100.87.186.1:~/comidas-de-familia/
+          $SCP public/index.html aios@100.87.186.1:~/comidas-de-familia/public/
+
+          $SSH 'export PATH="$HOME/.bun/bin:$PATH" && cd ~/comidas-de-familia && bun install && launchctl unload ~/Library/LaunchAgents/com.comidas.server.plist && launchctl load ~/Library/LaunchAgents/com.comidas.server.plist'
